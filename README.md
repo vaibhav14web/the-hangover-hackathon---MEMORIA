@@ -30,10 +30,7 @@ We built this project to prove that LLMs, when backed by structured entity-relat
 
 ---
 
-## Demo
 
-* **Live Frontend Endpoint**: `http://localhost:8501`
-* **Live API Server**: `http://localhost:8000`
 
 ### Interactive UI Preview
 The Streamlit interface features a custom premium dark mode designed for clear visual separation of generated answers, citation badges, and raw context evidence:
