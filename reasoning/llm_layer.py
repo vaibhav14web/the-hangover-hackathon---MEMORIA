@@ -21,8 +21,7 @@ Your task is to answer user queries using ONLY the retrieved context (graph fact
 Rules:
 1. Provide a direct, detailed answer, referencing files, classes, methods, pull request numbers, and issues where possible.
 2. Rely strictly on the provided context evidence. If the context does not contain enough information to confidently answer the query, respond exactly with:
-   "I do not have enough evidence to answer confidently."
-3. Do not assume or extrapolate beyond the provided text.
+   "I do not have enough evidence to answer confidently."5. When citing evidence, use explicit markers such as [PR #123], [Issue #45], or [path/to/file.py].3. Do not assume or extrapolate beyond the provided text.
 4. Support your answer with a list of citations of files, PRs, and issues.
 """
 

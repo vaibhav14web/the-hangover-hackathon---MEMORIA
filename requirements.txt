@@ -1,0 +1,10 @@
+cognee>=1.2.2
+litellm
+fastapi
+uvicorn
+streamlit
+python-dotenv
+requests
+PyGithub
+GitPython
+pytest

@@ -13,6 +13,7 @@ os.environ["COGNEE_SKIP_CONNECTION_TEST"] = "true"
 import cognee
 from ingestion.github_client import GitHubClient
 from graph.builder import format_pr_for_ingestion
+from graph.cognee_client import CogneeClient
 
 logger = logging.getLogger("memoria.preload")
 logging.basicConfig(level=logging.INFO)
@@ -38,14 +39,20 @@ async def preload():
     # Sort PRs by number to ingest them in historical order
     prs = sorted(prs, key=lambda x: x["number"])
 
+    cognee_client = CogneeClient()
+    try:
+        await cognee_client.prune_memory()
+    except Exception as e:
+        logger.warning("Skipping prune at preload start: %s", e)
+
     for i, pr in enumerate(prs):
         logger.info("Processing PR %d of %d (PR #%d: %s)...", i + 1, len(prs), pr["number"], pr["title"])
         formatted_text = format_pr_for_ingestion(pr)
         
         try:
-            await cognee.add([formatted_text], dataset_name="fastapi_demo")
+            await cognee_client.add_documents([formatted_text], dataset_name="fastapi_demo")
             logger.info("PR #%d added to Cognee. Running cognify...", pr["number"])
-            await cognee.cognify()
+            await cognee_client.build_graph()
             logger.info("✓ PR #%d cognified successfully.", pr["number"])
         except Exception as e:
             logger.error("Failed to ingest PR #%d: %s", pr["number"], e)
@@ -57,5 +64,10 @@ async def preload():
             
     logger.info("✓ Sequential preload completed successfully!")
 
+
+async def run_preload():
+    await preload()
+
+
 if __name__ == "__main__":
-    asyncio.run(preload())
+    asyncio.run(run_preload())

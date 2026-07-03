@@ -29,6 +29,10 @@ class QueryResponse(BaseModel):
     answer: str
     evidence: str
     citations: List[CitationSchema]
+    retrieval_method: Optional[str] = Field(
+        None,
+        description="The Cognee retrieval strategy used for this answer, if available."
+    )
 
 class StatusResponse(BaseModel):
     """

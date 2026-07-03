@@ -1,10 +1,7 @@
 import logging
 import re
-import os
 import json
-import sqlite3
-import lancedb
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from graph.cognee_client import CogneeClient
 from cognee.api.v1.search import SearchType
 from reasoning.llm_layer import query_llm
@@ -42,6 +39,58 @@ class QueryEngine:
 
         return citations
 
+    def _extract_text_from_search_result(self, item: Any) -> str:
+        if item is None:
+            return ""
+
+        if isinstance(item, str):
+            return item.strip()
+
+        if isinstance(item, dict):
+            for key in ("text", "content", "answer", "payload", "data", "metadata"):
+                if key in item:
+                    value = item[key]
+                    if isinstance(value, str):
+                        return value.strip()
+                    if isinstance(value, dict):
+                        return self._extract_text_from_search_result(value)
+            if "payload" in item and isinstance(item["payload"], dict):
+                return self._extract_text_from_search_result(item["payload"])
+            values = [str(v).strip() for v in item.values() if isinstance(v, str) and v.strip()]
+            return "\n".join(values) if values else json.dumps(item, ensure_ascii=False)
+
+        if hasattr(item, "dict"):
+            try:
+                return self._extract_text_from_search_result(item.dict())
+            except Exception:
+                pass
+
+        if hasattr(item, "to_dict"):
+            try:
+                return self._extract_text_from_search_result(item.to_dict())
+            except Exception:
+                pass
+
+        if hasattr(item, "content"):
+            return str(getattr(item, "content")).strip()
+
+        return str(item).strip()
+
+    def _normalize_search_results(self, results: Any) -> List[str]:
+        normalized = []
+        if results is None:
+            return normalized
+
+        if isinstance(results, list):
+            for item in results:
+                text = self._extract_text_from_search_result(item)
+                if text:
+                    normalized.append(text)
+            return normalized
+
+        text = self._extract_text_from_search_result(results)
+        return [text] if text else []
+
     async def execute_query(self, query: str) -> Dict[str, Any]:
         """
         Executes query retrieval, LLM reasoning, and parses citations.
@@ -59,102 +108,34 @@ class QueryEngine:
                         for cached_q, cached_val in cache.items():
                             if cached_q.strip().lower() == query.strip().lower():
                                 logger.info("Cache HIT for query: '%s'", query)
+                                cached_val.setdefault("retrieval_method", "CACHE_HIT")
                                 return cached_val
         except Exception as ce:
             logger.warning("Failed to check cache: %s", ce)
 
         context_parts = []
+        retrieval_method: Optional[str] = None
 
-        # Parse exact PR or Issue numbers from the query (supporting optional '#' sign)
-        pr_numbers = re.findall(r"(?:PR|Pull Request|PullRequest)\s*#?\s*(\d+)", query, re.IGNORECASE)
-        issue_numbers = re.findall(r"(?:Issue)\s*#?\s*(\d+)", query, re.IGNORECASE)
-        
-        # Direct chunk routing: If specific PRs or Issues are mentioned in the query, fetch their chunks directly from LanceDB
-        if pr_numbers or issue_numbers:
-            logger.info("Query mentions PRs/Issues. Performing direct LanceDB search.")
-            try:
-                import cognee
-                cognee_dir = os.path.dirname(cognee.__file__)
-                paths_to_try = [
-                    os.path.join(cognee_dir, ".cognee_system", "databases", "cognee_db"),
-                    os.path.expanduser("~/.cognee/databases/cognee_db"),
-                    os.path.expanduser("~/.cognee_system/databases/cognee_db"),
-                    os.path.abspath("venv/Lib/site-packages/cognee/.cognee_system/databases/cognee_db"),
-                    os.path.abspath(".venv/Lib/site-packages/cognee/.cognee_system/databases/cognee_db")
-                ]
-                db_path = None
-                for path in paths_to_try:
-                    if os.path.exists(path):
-                        db_path = path
-                        break
-                
-                if db_path and os.path.exists(db_path):
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT vector_database_url FROM dataset_database LIMIT 1")
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        lancedb_path = row[0]
-                        # If the absolute path stored in DB does not exist, resolve it relative to the dynamic cognee database directory
-                        if not os.path.exists(lancedb_path):
-                            subpath_match = re.search(r"databases[\\/](.+)$", lancedb_path)
-                            if subpath_match:
-                                relative_subpath = subpath_match.group(1)
-                                potential_path = os.path.join(os.path.dirname(db_path), relative_subpath)
-                                if os.path.exists(potential_path):
-                                    lancedb_path = potential_path
-                        
-                        if os.path.exists(lancedb_path):
-                            db = lancedb.connect(lancedb_path)
-                            tbl = db.open_table("DocumentChunk_text")
-                            arrow_table = tbl.to_arrow()
-                            payloads = arrow_table["payload"].to_pylist()
-                            
-                            for p_val in payloads:
-                                p_dict = eval(p_val) if isinstance(p_val, str) else p_val
-                                text = p_dict.get("text", "")
-                                
-                                # Check for PR matches
-                                for pr_num in pr_numbers:
-                                    match_patterns = [f"#{pr_num}", f"PR {pr_num}", f"PR #{pr_num}", f"Pull Request #{pr_num}"]
-                                    if any(pattern in text for pattern in match_patterns):
-                                        context_parts.append(text)
-                                        
-                                # Check for Issue matches
-                                for issue_num in issue_numbers:
-                                    match_patterns = [f"#{issue_num}", f"Issue {issue_num}", f"Issue #{issue_num}"]
-                                    if any(pattern in text for pattern in match_patterns):
-                                        context_parts.append(text)
-                    conn.close()
-            except Exception as direct_ex:
-                logger.warning("Direct LanceDB retrieval failed: %s", direct_ex)
-        
-        # 2. Retrieve additional context using RAG_COMPLETION and GRAPH_COMPLETION as fallback
-        for search_type in [SearchType.RAG_COMPLETION, SearchType.GRAPH_COMPLETION]:
+        # Retrieve graph-aware evidence first, then fall back to insights and RAG
+        for search_type in [SearchType.GRAPH_COMPLETION, SearchType.INSIGHTS, SearchType.RAG_COMPLETION]:
             try:
                 result = await self.cognee_client.search_memory(query, search_type)
-                if result:
-                    if isinstance(result, list):
-                        for item in result:
-                            if isinstance(item, dict):
-                                context_parts.append(str(item))
-                            elif hasattr(item, "dict"):
-                                context_parts.append(str(item.dict()))
-                            else:
-                                context_parts.append(str(item))
-                    elif isinstance(result, dict):
-                        context_parts.append(str(result))
-                    else:
-                        context_parts.append(str(result))
+                new_parts = self._normalize_search_results(result)
+                if new_parts:
+                    retrieval_method = search_type.name
+                    logger.info("SearchType.%s returned %d context parts", search_type.name, len(new_parts))
+                    context_parts.extend(new_parts)
+                    break
+                else:
+                    logger.info("SearchType.%s returned no context. Falling back.", search_type.name)
             except Exception as se:
                 logger.warning("Retrieval failed for SearchType.%s: %s", search_type.name, se)
 
-        # 3. Deduplicate and clean context parts
+        # Deduplicate and clean context parts
         seen_chunks = set()
         unique_context_parts = []
         for part in context_parts:
             part_str = part.strip()
-            # Clean out useless "Got it." or similar generic LLM fallbacks from retrieved context
             if part_str == "Got it.":
                 continue
             if part_str and part_str not in seen_chunks:
@@ -168,13 +149,12 @@ class QueryEngine:
 
         logger.info("Retrieved %d unique context chunks.", len(unique_context_parts))
         
-        # 4. Call LiteLLM query logic
+        # Call LiteLLM query logic
         answer = await query_llm(query, context_text)
         
-        # 5. Extract citations from answer and context
+        # Extract citations from answer and context
         citations = self._extract_citations(answer + "\n" + context_text)
 
-        # Deduplicate citations based on type and id
         seen = set()
         deduped_citations = []
         for cit in citations:
@@ -187,5 +167,6 @@ class QueryEngine:
             "query": query,
             "answer": answer,
             "evidence": context_text,
-            "citations": deduped_citations
+            "citations": deduped_citations,
+            "retrieval_method": retrieval_method
         }
