@@ -1,0 +1,55 @@
+{
+  "Why did FastAPI migrate to Pydantic v2?": {
+    "query": "Why did FastAPI migrate to Pydantic v2?",
+    "answer": "FastAPI migrated to Pydantic v2 (introduced in PR #9816) to gain significant performance benefits. Pydantic v2 features a core validation engine rewritten in Rust, rendering serialization and validation up to 10x faster. During the transition, FastAPI maintainer (tiangolo) prioritized backward compatibility by introducing a compatibility layer (pydantic.v1) to enable gradual codebase migrations and prevent breaking downstream applications.",
+    "evidence": "FastAPI PR #9816 (merged on 2023-07-07) added support for Pydantic v2. FastAPI 0.100.0 introduced initial support. FastAPI 0.119.0+ added the pydantic.v1 compatibility layer. FastAPI 0.126.0+ fully dropped Pydantic v1. Pydantic v2's core is rewritten in Rust for massive speed improvements. Maintainer tiangolo focused on backward compatibility.",
+    "citations": [
+      {
+        "type": "pull_request",
+        "id": 9816,
+        "label": "PR #9816"
+      }
+    ]
+  },
+  "What broke when FastAPI refactored Depends to use dataclasses?": {
+    "query": "What broke when FastAPI refactored Depends to use dataclasses?",
+    "answer": "When FastAPI refactored dependency internals to use dataclasses in PR #14254, it broke the downstream library Cadwyn. This occurred because the refactor caused `Depends` and `Security` to no longer be hashable, breaking dependency resolution in Cadwyn. The issue was resolved in the follow-up PR #14320 by restoring the hashability of these classes.",
+    "evidence": "PR #14254 refactored Depends internals using dataclasses. This caused Depends and Security to become unhashable, breaking the Cadwyn library's dependency resolution. Follow-up PR #14320 restored hashability to Depends and Security to resolve the Cadwyn breakage.",
+    "citations": [
+      {
+        "type": "pull_request",
+        "id": 14254,
+        "label": "PR #14254"
+      },
+      {
+        "type": "pull_request",
+        "id": 14320,
+        "label": "PR #14320"
+      }
+    ]
+  },
+  "What are the supported dependency scopes in FastAPI?": {
+    "query": "What are the supported dependency scopes in FastAPI?",
+    "answer": "FastAPI introduced dependency lifetime scopes in PR #14262. The two supported scopes are:\n\n1. **\"request\"** (Default): The dependency runs once per request, and exits after the response is sent back.\n2. **\"function\"**: The dependency runs before the path operation function and exits immediately after the function returns (before the response is sent). This resolves issues with StreamingResponse where a DB session was closed before the response iterator could consume it.",
+    "evidence": "PR #14262 adds support for dependency scopes: 'function' and 'request'. 'request' is default. 'function' scope exits after the function returns, resolving database session lifecycle conflicts with StreamingResponse.",
+    "citations": [
+      {
+        "type": "pull_request",
+        "id": 14262,
+        "label": "PR #14262"
+      }
+    ]
+  },
+  "What new capabilities does PR 15745 unlock for FastAPI users?": {
+    "query": "What new capabilities does PR 15745 unlock for FastAPI users?",
+    "answer": "PR #15745 refactored FastAPI internals to preserve APIRouter and APIRoute instances instead of cloning/copying them. This unlocks: (1) Adding routes after router inclusion — they are reflected dynamically. (2) Including subrouters before defining their routes. (3) Memory efficiency from avoiding route copying. (4) Custom router matching via new .matches() and .handle() methods. This PR superseded #4794 and unblocks middleware per router, exception handlers per router, and dependencies per router in future releases.",
+    "evidence": "PR #15745 body explicitly lists these as Features and Future Features Enabled sections.",
+    "citations": [
+      {
+        "type": "pull_request",
+        "id": 15745,
+        "label": "PR #15745"
+      }
+    ]
+  }
+}
